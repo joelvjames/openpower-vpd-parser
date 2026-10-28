@@ -432,6 +432,18 @@ class Worker
         const std::optional<types::VPDMapVariant> i_parsedVpd = std::nullopt);
 
     /**
+     * @brief API to perform backup and restore on storage keywords.
+     *
+     * Compares EEPROM values with the already published D-Bus values for
+     * storage keywords. If a mismatch is detected, the source VPD map is
+     * updated with the D-Bus value and a PEL is generated to report the
+     * mismatch.
+     *
+     * @param[in,out] io_srcVpdMap - Source VPD map.
+     */
+    void backupAndRestoreStorageInterface(types::VPDMapVariant& io_srcVpdMap);
+
+    /**
      * @brief An API to perform backup or restore of VPD.
      *
      * @param[in,out] io_srcVpdMap - Source VPD map.

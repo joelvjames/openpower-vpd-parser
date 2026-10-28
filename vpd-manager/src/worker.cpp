@@ -435,6 +435,7 @@ void Worker::setDeviceTreeAndJson()
                     "Failed to check if backup and restore required. Reason : " +
                     commonUtility::getErrCodeMsg(l_errCode));
             }
+            backupAndRestoreStorageInterface(parsedVpdMap);
         }
 
         // proceed to publish system VPD.
@@ -1882,6 +1883,105 @@ void Worker::collectFrusFromJson()
             // add vpdFilePath(EEPROM path) to failed list
             m_failedEepromPaths.push_front(vpdFilePath);
         }
+    }
+}
+
+void Worker::backupAndRestoreStorageInterface(
+    types::VPDMapVariant& io_srcVpdMap)
+{
+    try
+    {
+        auto* l_ipzVpdMap = std::get_if<types::IPZVpdMap>(&io_srcVpdMap);
+        if (!l_ipzVpdMap)
+        {
+            logging::logMessage(
+                "Invalid VPD type, unable to restore storage interface");
+            return;
+        }
+
+        std::array<const char*, 1> l_interfaces = {constants::storageInf};
+        const auto l_objectMap =
+            dbusUtility::getObjectMap(constants::systemInvPath, l_interfaces);
+        if (l_objectMap.empty())
+        {
+            logging::logMessage(
+                "Storage interface unavailable, skipping restore");
+            return;
+        }
+
+        auto l_itrToVsys = l_ipzVpdMap->find(constants::recVSYS);
+        if (l_itrToVsys == l_ipzVpdMap->end())
+        {
+            logging::logMessage(
+                "VSYS record unavailable, unable to restore storage interface");
+            return;
+        }
+
+        types::IPZKwdValueMap& l_vsysKwdMap = l_itrToVsys->second;
+
+        const std::array<std::string, 5> l_kwdList = {
+            constants::kwdTN, constants::kwdSG, constants::kwdID,
+            constants::kwdNN, constants::kwdMN};
+
+        std::vector<std::string> l_vpdMismatchList;
+        l_vpdMismatchList.reserve(5);
+
+        for (const auto& l_kwd : l_kwdList)
+        {
+            uint16_t l_errCode = 0;
+            const std::string l_srcVal =
+                vpdSpecificUtility::getKwVal(l_vsysKwdMap, l_kwd, l_errCode);
+            const types::BinaryVector l_srcBinaryValue(l_srcVal.begin(),
+                                                       l_srcVal.end());
+
+            const auto l_dstVal = dbusUtility::readDbusProperty(
+                constants::pimServiceName, constants::systemInvPath,
+                constants::vsysInf, l_kwd);
+            types::BinaryVector l_dstBinaryValue;
+            if (const auto* l_ptr = std::get_if<types::BinaryVector>(&l_dstVal))
+            {
+                l_dstBinaryValue = *l_ptr;
+            }
+
+            if (l_srcBinaryValue == l_dstBinaryValue)
+            {
+                continue;
+            }
+
+            if (l_dstBinaryValue.empty())
+            {
+                logging::logMessage("backup data unavailable for keyword [" +
+                                    l_kwd + "], unable to perform restore");
+                continue;
+            }
+
+            l_vsysKwdMap[l_kwd] =
+                std::string(l_dstBinaryValue.begin(), l_dstBinaryValue.end());
+            l_vpdMismatchList.emplace_back(
+                l_kwd + " primary data: " +
+                commonUtility::convertByteVectorToHex(l_srcBinaryValue) +
+                " backup data: " +
+                commonUtility::convertByteVectorToHex(l_dstBinaryValue));
+        }
+
+        if (!l_vpdMismatchList.empty())
+        {
+            std::string l_errorMsg("Data mismatch for keyword/keywords: ");
+            for (const auto& l_entry : l_vpdMismatchList)
+            {
+                l_errorMsg += l_entry + "; ";
+            }
+            EventLogger::createSyncPel(
+                types::ErrorType::VpdMismatch, types::SeverityType::Warning,
+                __FILE__, __FUNCTION__, 0, l_errorMsg, std::nullopt,
+                std::nullopt, std::nullopt, std::nullopt);
+        }
+    }
+    catch (const std::exception& l_ex)
+    {
+        logging::logMessage(
+            "Exception while backup and restore on storage interface: " +
+            std::string(l_ex.what()));
     }
 }
 
